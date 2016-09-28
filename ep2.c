@@ -88,6 +88,19 @@ void *func (void *a) {
     int i;
     ARGS* p = (ARGS *) a;
     i = p->i;
-    printf("Olar, sou a thread %d\n", i);
+    while (TRUE) {
+        /*P(FLAG)*/
+        /*SE FLAG FOR 1, PARA TUDO*/
+        /*V(FLAG)*/
+
+        /*CALCULA A POSIÇÃO*/
+        /*P(TRACK)*/
+        /*SE TRACK[POS] != 0 ATUALIZA TUDO*/
+        /*v(TRACK)*/
+
+        /*BARREIRA DE SINCRONIZAÇAO*/
+        /*SE LAP == 16, FLAG = 1 */
+    }
+
     return NULL;
 }
