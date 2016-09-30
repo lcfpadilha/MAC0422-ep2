@@ -17,9 +17,16 @@
 typedef struct cyc {
     int vel;
     int team;
+    int lap;
     float pos;
     pthread_t id;
 } CYCLIST;
+
+typedef struct sl {
+    pthread_t mainpos;
+    pthread_t ultrapos;
+    pthread_mutex_t mut;
+} SLOT;
 
 typedef struct arguments {
     int i;
@@ -29,8 +36,10 @@ typedef struct arguments {
 void *func (void *a);
 
 /*      Variáveis globais       */
-int** track;
-CYCLIST* c;
+SLOT *track;
+CYCLIST *c;
+pthread_barrier_t barrera;
+int raceEnd;
 
 int main (int argc, char **argv) {
     int n, d, debug, i;
@@ -54,21 +63,27 @@ int main (int argc, char **argv) {
         for (i = 0; i < n; i++) {
             c[i].vel = 60;
             c[i].team = 0;
+            c[i].lap = 0;
             c[i].pos = 0.0;
         }
         for (i = n; i < 2 * n; i++) {
             c[i].vel = 60;
             c[i].team = 1;
+            c[i].lap = 0;
             c[i].pos = (float) (d / 2);
         }
 
         /* Inicializando o vetor track */
-        track = malloc (d * sizeof (int *));
+        track = malloc (d * sizeof (SLOT));
         for (i = 0; i < d; i++) {
-            track[i] = malloc (2 * sizeof (int));
-            track[i][0] = 0;
-            track[i][1] = 0;
+            track[i].mainpos = 0;
+            track[i].ultrapos = 0;
+            track[i].mut = PTHREAD_MUTEX_INITIALIZER;
         }
+
+        /* Inicializando a barreira para 2n threads*/
+        pthread_barrier_init (&barrera, NULL, 2*n);
+        raceEnd = 0;
 
         /* Disparando as threads  */
         for (i = 0; i < 2 * n; i++) {
@@ -85,20 +100,45 @@ int main (int argc, char **argv) {
 }
 
 void *func (void *a) {
-    int i;
+    int i, res;
+    float nextPos;
     ARGS* p = (ARGS *) a;
     i = p->i;
     while (TRUE) {
-        /*P(FLAG)*/
-        /*SE FLAG FOR 1, PARA TUDO*/
-        /*V(FLAG)*/
 
-        /*CALCULA A POSIÇÃO*/
-        /*P(TRACK)*/
-        /*SE TRACK[POS] != 0 ATUALIZA TUDO*/
-        /*v(TRACK)*/
+        /* verificar se a corrida acabou */
+        if (raceEnd) break;
 
-        /*BARREIRA DE SINCRONIZAÇAO*/
+        /* calcular a próxima posição do ciclista */
+        if (vel == 60) {
+            nextPos = (c[i].pos + 1) % n;
+        }
+
+        /* solicitar acesso ao próximo slot */
+        pthread_mutex_lock (&track[nextPos].mut);
+        {
+            /* se não tiver ninguém nesse slot, vamos ocupar ele */
+            if (track[nextPos].mainpos == 0) {
+                track[nextPos] = c[i].id;
+                c[i].pos = nextPos;
+
+                /* verificar se houve um incremento de volta */
+                if (nextPos == 0) c[i].lap++;
+            }
+        }
+        pthread_mutex_unlock (&track[nexSl].mut);
+
+        /* sincronizar na barreira para o intervalo seguinte */
+        res = pthread_barrier_wait (&barrera);
+
+        /* esta condição só vai ser executada em uma das threads */
+        if(res == PTHREAD_BARRIER_SERIAL_THREAD) {
+            //verificar se a corrida acabou (como?)
+        }
+
+        /* mais uma barreira, pra garantir 
+
+
         /*SE LAP == 16, FLAG = 1 */
     }
 
