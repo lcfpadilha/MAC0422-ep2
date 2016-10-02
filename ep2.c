@@ -18,7 +18,7 @@ typedef struct cyc {
     int vel;
     int team;
     int lap;
-    float pos;
+    int pos;
     pthread_t id;
     int finalTick;
 } CYCLIST;
@@ -69,13 +69,15 @@ int main (int argc, char **argv) {
             c[i].vel = 60;
             c[i].team = 0;
             c[i].lap = 0;
-            c[i].pos = 0.0;
+            c[i].pos = 0;
+            c[i].finalTick = 0;
         }
         for (i = n; i < 2 * n; i++) {
             c[i].vel = 60;
             c[i].team = 1;
             c[i].lap = 0;
-            c[i].pos = (float) (d / 2);
+            c[i].pos = (d / 2);
+            c[i].finalTick = 0;
         }
 
         /* Inicializando o vetor pista */
@@ -83,7 +85,7 @@ int main (int argc, char **argv) {
         for (i = 0; i < d; i++) {
             pista[i].mainpos = 0;
             pista[i].ultrapos = 0;
-            pista[i].mut = PTHREAD_MUTEX_INITIALIZER;
+            pthread_mutex_init ( &pista[i].mut, NULL);
         }
 
         /* Inicializando a barreira para 2n threads*/
@@ -105,9 +107,8 @@ int main (int argc, char **argv) {
 }
 
 void *func (void *a) {
-    int i, res, finish0 = 0, finish1 = 0, j, passedLap;
-    int fastcyc1, fastcyc2, fast1ind, fast2ind, first, second;
-    float nextPos;
+    int i, res, j, passedLap, nextPos;
+    int time1, time2, index1, index2, first, second;
     ARGS* p = (ARGS *) a;
     i = p->i;
     while (TRUE) {
@@ -115,17 +116,21 @@ void *func (void *a) {
         /* verificar se a corrida acabou */
         if (raceEnd) break;
 
+        
         /* calcular a próxima posição do ciclista */
-        if (vel == 60) {
+        if (60 == 60) {
             nextPos = (c[i].pos + 1) % d;
         }
+        
+
 
         /* solicitar acesso ao próximo slot */
         pthread_mutex_lock (&pista[nextPos].mut);
         {
-            /* se não tiver ninguém nesse slot, vamos ocupar ele */
+            /* se não tiver ninguém nesse slot, vamos ocupar ele e desocupar o anterior */
             if (pista[nextPos].mainpos == 0) {
-                pista[nextPos] = c[i].id;
+                pista[nextPos].mainpos = c[i].id;
+                pista[c[i].pos].mainpos = 0;
                 c[i].pos = nextPos;
 
                 /* verificar se houve um incremento de volta */
@@ -137,34 +142,35 @@ void *func (void *a) {
                         c[i].finalTick = timeTick;
 
                     /* verificamos se ele é o terceiro a passar */
-                    passedLap = fastcyc1 = fastcyc2 = fast1ind = fast2ind = 0;
+                    passedLap = time1 = time2 = index1 = index2 = 0;
                     for (j = 0; j < cycsize; j++) {
 
                         /* guardamos tambem o primeiro e segundo colocados */
                         if (c[j].team == c[i].team && c[j].lap == c[i].lap && i != j) {
-                            if (fastcyc1 == 0) {
-                                fastcyc1 = (c[j].lap * d) + c[j].pos;
-                                fast1ind = j;
+                            if (time1 == 0) {
+                                time1 = (c[j].lap * d) + c[j].pos;
+                                index1 = j;
                             } else {
-                                fastcyc2 = (c[j].lap * d) + c[j].pos;
-                                fast2ind = j;
+                                time2 = (c[j].lap * d) + c[j].pos;
+                                index2 = j;
                             }
                             passedLap++;
 
                         }
                     }
 
+                    /* exibimos o print de nova volta */
                     if (passedLap == 2) {
-                        printf("Ciclista %d passou para a volta %d.\n", i, c[i].lap + 1);
-                        if (fastcyc1 > fastcyc2) {
-                            first = fastcyc1;
-                            second = fastcyc2;
+                        if (time1 > time2) {
+                            first = index1;
+                            second = index2;
                         } else {
-                            first = fastcyc2;
-                            second = fastcyc1;
+                            first = index2;
+                            second = index1;
                         }
 
-                        printf("Primeiro da equipe: %d\nSegundo da equipe: %d\n\n", first, second);
+                        printf("Ciclista %d passou para a volta %d.\n", i, c[i].lap + 1);
+                        printf("Primeiro da equipe: %d\nSegundo  da equipe: %d\n\n", first, second);
 
                     }
                 }
@@ -191,6 +197,12 @@ void *func (void *a) {
                     break;
                 }
             }
+            
+            /* se a corrida acabou, imprimimos o ranking */
+            if(raceEnd) {
+                
+            }
+            
         }
 
         /* mais uma barreira, pra garantir que ninguém vai recomeçar 
