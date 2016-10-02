@@ -20,6 +20,7 @@ typedef struct cyc {
     int lap;
     float pos;
     pthread_t id;
+    int finalTick;
 } CYCLIST;
 
 typedef struct sl {
@@ -36,20 +37,23 @@ typedef struct arguments {
 void *func (void *a);
 
 /*      Variáveis globais       */
-SLOT *track;
+SLOT *pista;
 CYCLIST *c;
+int cycsize;
 pthread_barrier_t barrera;
 int raceEnd;
+int timeTick;
+int d;
 
 int main (int argc, char **argv) {
-    int n, d, debug, i;
+    int n, debug, i;
     char type;
     ARGS* thread_arg;
     if (argc < 4) exit (EXIT_FAILURE);
 
     /* Inicialização das variáveis dadas na linha de comando*/
-    n = atoi (argv[1]);
-    d = atoi (argv[2]);
+    d = atoi (argv[1]);
+    n = atoi (argv[2]);
     type = argv[3][0];
     if (argc > 4 && strcmp (argv[4], "-d") == 0)
         debug = TRUE; 
@@ -59,6 +63,7 @@ int main (int argc, char **argv) {
     /* Modo básico */
     if (type == 'v') {
         /* Inicializando os 2xN ciclistas */
+        cycsize = 2*n;
         c = malloc (2 * n * sizeof (CYCLIST));
         for (i = 0; i < n; i++) {
             c[i].vel = 60;
@@ -73,12 +78,12 @@ int main (int argc, char **argv) {
             c[i].pos = (float) (d / 2);
         }
 
-        /* Inicializando o vetor track */
-        track = malloc (d * sizeof (SLOT));
+        /* Inicializando o vetor pista */
+        pista = malloc (d * sizeof (SLOT));
         for (i = 0; i < d; i++) {
-            track[i].mainpos = 0;
-            track[i].ultrapos = 0;
-            track[i].mut = PTHREAD_MUTEX_INITIALIZER;
+            pista[i].mainpos = 0;
+            pista[i].ultrapos = 0;
+            pista[i].mut = PTHREAD_MUTEX_INITIALIZER;
         }
 
         /* Inicializando a barreira para 2n threads*/
@@ -100,7 +105,8 @@ int main (int argc, char **argv) {
 }
 
 void *func (void *a) {
-    int i, res;
+    int i, res, finish0 = 0, finish1 = 0, j, passedLap;
+    int fastcyc1, fastcyc2, fast1ind, fast2ind, first, second;
     float nextPos;
     ARGS* p = (ARGS *) a;
     i = p->i;
@@ -111,35 +117,85 @@ void *func (void *a) {
 
         /* calcular a próxima posição do ciclista */
         if (vel == 60) {
-            nextPos = (c[i].pos + 1) % n;
+            nextPos = (c[i].pos + 1) % d;
         }
 
         /* solicitar acesso ao próximo slot */
-        pthread_mutex_lock (&track[nextPos].mut);
+        pthread_mutex_lock (&pista[nextPos].mut);
         {
             /* se não tiver ninguém nesse slot, vamos ocupar ele */
-            if (track[nextPos].mainpos == 0) {
-                track[nextPos] = c[i].id;
+            if (pista[nextPos].mainpos == 0) {
+                pista[nextPos] = c[i].id;
                 c[i].pos = nextPos;
 
                 /* verificar se houve um incremento de volta */
-                if (nextPos == 0) c[i].lap++;
+                if (nextPos == 0) {
+                    c[i].lap++;
+
+                    /* caso ele terminou a corrida, marcamos isso */
+                    if(c[i].lap == 16)
+                        c[i].finalTick = timeTick;
+
+                    /* verificamos se ele é o terceiro a passar */
+                    passedLap = fastcyc1 = fastcyc2 = fast1ind = fast2ind = 0;
+                    for (j = 0; j < cycsize; j++) {
+
+                        /* guardamos tambem o primeiro e segundo colocados */
+                        if (c[j].team == c[i].team && c[j].lap == c[i].lap && i != j) {
+                            if (fastcyc1 == 0) {
+                                fastcyc1 = (c[j].lap * d) + c[j].pos;
+                                fast1ind = j;
+                            } else {
+                                fastcyc2 = (c[j].lap * d) + c[j].pos;
+                                fast2ind = j;
+                            }
+                            passedLap++;
+
+                        }
+                    }
+
+                    if (passedLap == 2) {
+                        printf("Ciclista %d passou para a volta %d.\n", i, c[i].lap + 1);
+                        if (fastcyc1 > fastcyc2) {
+                            first = fastcyc1;
+                            second = fastcyc2;
+                        } else {
+                            first = fastcyc2;
+                            second = fastcyc1;
+                        }
+
+                        printf("Primeiro da equipe: %d\nSegundo da equipe: %d\n\n", first, second);
+
+                    }
+                }
             }
         }
-        pthread_mutex_unlock (&track[nexSl].mut);
+        pthread_mutex_unlock (&pista[nextPos].mut);
 
         /* sincronizar na barreira para o intervalo seguinte */
         res = pthread_barrier_wait (&barrera);
 
         /* esta condição só vai ser executada em uma das threads */
-        if(res == PTHREAD_BARRIER_SERIAL_THREAD) {
-            //verificar se a corrida acabou (como?)
+        if (res == PTHREAD_BARRIER_SERIAL_THREAD) {
+
+            /* aumentar o tempo atual */
+            timeTick++; 
+
+            /* verificar se a corrida acabou */
+            raceEnd = 1;
+            for (j = 0; j < cycsize; j++) {
+
+                /* procuramos ciclistas que ainda nao acabaram */
+                if(c[j].lap < 16) {
+                    raceEnd = 0;
+                    break;
+                }
+            }
         }
 
-        /* mais uma barreira, pra garantir 
-
-
-        /*SE LAP == 16, FLAG = 1 */
+        /* mais uma barreira, pra garantir que ninguém vai recomeçar 
+           a volta sem saber se a corrida acabou                      */
+        pthread_barrier_wait (&barrera);
     }
 
     return NULL;
