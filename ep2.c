@@ -41,6 +41,7 @@ void *ciclista (void *a);
 void *dummy ();
 void waitForSync ();
 void manageRace ();
+void breakCyclist ();
 
 /*      Variáveis globais       */
 SLOT *pista;
@@ -53,6 +54,9 @@ int raceEnd;
 int timeTick;
 int d;
 int debug;
+int globalLap;
+int timeToBreak;
+pthread_mutex_t lapmutex;
 
 int main (int argc, char **argv) {
     int n, i;
@@ -77,6 +81,8 @@ int main (int argc, char **argv) {
     runners[0] = n;
     runners[1] = n;
     cycsize = 2*n;
+    globalLap = 0;
+    timeToBreak = 0;
     
     /* Modo básico */
     if (type == 'v') {
@@ -112,7 +118,8 @@ int main (int argc, char **argv) {
 
         /* Inicializando a barreira para 2n threads e o mutex do random*/
         pthread_barrier_init (&barrera, NULL, 2*n);
-        pthread_mutex_init ( &randmutex, NULL);
+        pthread_mutex_init (&randmutex, NULL);
+        pthread_mutex_init (&lapmutex, NULL);
         
         /* Disparando as threads  */
         for (i = 0; i < 2 * n; i++) {
@@ -157,6 +164,20 @@ void *ciclista (void *a) {
                 /* verificar se houve um incremento de volta */
                 if (nextPos == 0) {
                     c[i].lap++;
+                    
+                    /* verificamos se ele é o primeiro a mudar de volta */
+                    pthread_mutex_lock(&lapmutex);
+                    {
+                        if(c[i].lap > globalLap) {
+                            globalLap++;
+                            
+                            /* a cada quatro voltas, chance de alguem quebrar */
+                            if(globalLap % 4 == 0 && globalLap < 16) {
+                                timeToBreak = 1;
+                            }
+                        }
+                    }
+                    pthread_mutex_unlock(&lapmutex);
 
                     /* caso ele terminou a corrida, marcamos isso */
                     if(c[i].lap == 16)
@@ -192,33 +213,12 @@ void *ciclista (void *a) {
                             second = index1;
                         }
 
-                        printf("Ciclista %d passou para a volta %d.\n", c[i].id, c[i].lap + 1);
+                        printf("Ciclista %d passou para a volta %d no instante %.3fs.\n", 
+                               c[i].id, c[i].lap + 1, (float) (timeTick*60)/1000);
                         printf("Primeiro da equipe: %d\nSegundo  da equipe: %d\n\n", first, second);
 
                     }
                     
-                    /* a cada 4 voltas ele pode sofrer um infeliz acidente */
-                    if(c[i].lap < 16 && c[i].lap % 4 == 0) {
-                        
-                        /* solicitamos acesso ao mutex do random */
-                        pthread_mutex_lock(&randmutex);
-                        {
-                            random = rand() % 10;
-                        }
-                        pthread_mutex_unlock(&randmutex);
-                        
-                        /* a chance é 10% */
-                        if(random < 1) {
-                            
-                            /* a equipe tambem deve ter mais do que 3 ciclistas */
-                            if(runners[c[i].team] > 3) {
-                                pista[nextPos].mainpos = 0;
-                                c[i].broken = 1;
-                                printf("Ciclista %d sofreu um acidente!\n\n", c[i].id);
-                                runners[c[i].team]--;
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -287,6 +287,12 @@ void manageRace () {
 
     /* aumentar o tempo atual */
     timeTick++; 
+    
+    /* verificar se é necessario matar algum ciclista */
+    if (timeToBreak) {
+        timeToBreak = 0;
+        breakCyclist();
+    }
 
     /* verificar se a corrida acabou */
     raceEnd = 1;
@@ -304,5 +310,43 @@ void manageRace () {
     /* se a corrida acabou, imprimimos o ranking */
     if(raceEnd) {
 
+    }
+}
+
+/* rola um dado e com chance de 10% quebra algum ciclista */
+void breakCyclist () {
+    int startpoint = 0, endpoint = cycsize, chance, lucky;
+    
+    /* verificamos se as equipes são grandes o suficiente */
+    if(runners[0] == 3) {
+        startpoint = cycsize/2;
+    }
+    if(runners[1] == 3) {
+        endpoint = cycsize/2;
+    }
+    
+    if(startpoint == endpoint) return;
+    
+    /* solicitamos acesso ao mutex do random */
+    pthread_mutex_lock(&randmutex);
+    {
+        chance = rand() % 10;
+    }
+    pthread_mutex_unlock(&randmutex);
+    /* chance é de 10% */
+    if(chance < 1) {
+        pthread_mutex_lock(&randmutex);
+        {
+            do {
+                
+                /* normalizamos o random pra escolher um dos ciclistas */
+                lucky = (rand() % (endpoint - startpoint)) + startpoint;
+            } while(c[lucky].broken);
+        }
+        pthread_mutex_unlock(&randmutex);
+        c[lucky].broken = 1;
+        pista[c[lucky].pos].mainpos = 0;
+        printf("Ciclista %d sofreu um acidente!\n\n", c[lucky].id);
+        runners[c[lucky].team]--;
     }
 }
