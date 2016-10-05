@@ -254,8 +254,8 @@ void *ciclista (void *a) {
                             second = index1;
                         }
 
-                        printf("Ciclista %d passou para a volta %d no instante %.3fs.\n", 
-                               c[i].id, c[i].lap + 1, (float) (timeTick*60)/1000);
+                        printf("Ciclista %d (Equipe %d) passou para a volta %d no instante %.3fs.\n", 
+                               c[i].id, c[i].team+1, c[i].lap + 1, (float) (timeTick*60)/1000);
                         printf("Primeiro da equipe: %d\nSegundo  da equipe: %d\n\n", first, second);
 
                     }
@@ -380,7 +380,8 @@ void breakCyclist () {
         pthread_mutex_unlock(&randmutex);
         c[lucky].broken = 1;
         pista[c[lucky].pos].mainpos = 0;
-        printf("Ciclista %d sofreu um acidente!\n\n", c[lucky].id);
+        printf("Ciclista %d (Equipe %d) sofreu um acidente!\n\n", 
+            c[lucky].id, c[lucky].team + 1);
         runners[c[lucky].team]--;
     }
 }
