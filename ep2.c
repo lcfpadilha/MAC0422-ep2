@@ -14,29 +14,32 @@
 #define TRUE  1
 #define FALSE 0
 
-/* Structs usadas */
+/****************** Estruturas usadas ******************/
+/* Estrutura do Ciclista */
 typedef struct cyc {
-    int vel;
-    int team;
+    int id;
     int lap;
     int pos;
-    pthread_t thread;
-    int id;
-    int finalTick;
+    int vel;
+    int team;
     int broken;
+    int finalTick;
+    pthread_t thread;
 } CYCLIST;
 
+/* Estrutura de um slot da pista */
 typedef struct sl {
     pthread_t mainpos;
     pthread_t ultrapos;
     pthread_mutex_t mut;
 } SLOT;
 
+/* Estrutura dos argumentos das threads */
 typedef struct arguments {
     int i;
 } ARGS;
 
-/* Declaração de funções        */
+/**************** Declaração de funções ****************/
 void *ciclista (void *a);
 void *dummy ();
 void waitForSync ();
@@ -44,19 +47,19 @@ void manageRace ();
 void breakCyclist ();
 int comparator (const void *a, const void *b);
 
-/*      Variáveis globais       */
-SLOT *pista;
-CYCLIST *c;
-int runners[2];
-int cycsize;
-pthread_barrier_t barrera;
-pthread_mutex_t randmutex;
+/****************** Variaveis Globais ******************/
+SLOT *pista; /* Vetor de slot pista */
+CYCLIST *c;  /* Vetor de ciclista   */
+int d;       /* Tamanho da pista    */
+int debug;   /* Parametro para debug*/
+int cycsize; 
 int raceEnd;
 int timeTick;
-int d;
-int debug;
 int globalLap;
+int runners[2];
 int timeToBreak;
+pthread_barrier_t barrera;
+pthread_mutex_t randmutex;
 pthread_mutex_t lapmutex;
 
 int main (int argc, char **argv) {
@@ -116,55 +119,56 @@ int main (int argc, char **argv) {
             pista[i].ultrapos = 0;
             pthread_mutex_init ( &pista[i].mut, NULL);
         }
-
-        /* Inicializando a barreira para 2n threads e o mutex do random*/
-        pthread_barrier_init (&barrera, NULL, 2*n);
-        pthread_mutex_init (&randmutex, NULL);
-        pthread_mutex_init (&lapmutex, NULL);
-        
-        /* Disparando as threads  */
-        for (i = 0; i < 2 * n; i++) {
-            thread_arg = malloc (sizeof (ARGS));
-            thread_arg->i = i;
-            pthread_create (&c[i].thread, NULL, &ciclista, thread_arg);
-        }
-
-        /* Esperando retornar*/
-        for (i = 0; i < 2 * n; i++)
-            pthread_join (c[i].thread, NULL);
-        
-        /* após o fim da corrida */
-        printf("A corrida terminou!\n\nRanking:\n");
-        
-        /* ordenar o ranking de ciclistas */
-        qsort(c, 2*n, sizeof(*c), comparator);
-        winners[0] = winners[1] = thirdTick[0] = thirdTick[1] = 0;
-        
-        for(i = 0; i < cycsize; i++) {
-            
-            /* vamos contabilizar qual equipe venceu a corrida */
-            winners[c[i].team]++;
-            
-            /* pra isso, temos que ver qual terceiro ciclista acabou antes */
-            if(winners[c[i].team] == 3)
-                thirdTick[c[i].team] = c[i].finalTick;
-            
-            /* exibindo ranking */
-            if(c[i].broken)
-                printf("%do: Ciclista %d (Equipe %d) - ACIDENTE (Volta %d)\n", i+1, c[i].id, c[i].team+1, c[i].lap+1);
-            else
-                printf("%do: Ciclista %d (Equipe %d) - %.3fs\n", 
-                   i+1, c[i].id, c[i].team+1, (float) (c[i].finalTick*60)/1000);
-        }
-        
-        /* exibimos o print da vitória, pra terminar o EP */
-        if(thirdTick[0] < thirdTick[1])
-            printf("\nVitória da equipe 1!\n\n");    
-        else if(thirdTick[0] > thirdTick[1])
-            printf("\nVitória da equipe 2!\n\n");
-        else
-            printf("\nEmpate!\n\n");
     }
+    /* Inicializando a barreira para 2n threads e o mutex do random*/
+    pthread_barrier_init (&barrera, NULL, 2*n);
+    pthread_mutex_init (&randmutex, NULL);
+    pthread_mutex_init (&lapmutex, NULL);
+    
+    /* Disparando as threads  */
+    for (i = 0; i < 2 * n; i++) {
+        thread_arg = malloc (sizeof (ARGS));
+        thread_arg->i = i;
+        pthread_create (&c[i].thread, NULL, &ciclista, thread_arg);
+    }
+
+    /* Esperando retornar*/
+    for (i = 0; i < 2 * n; i++)
+        pthread_join (c[i].thread, NULL);
+    
+    /* após o fim da corrida */
+    printf("A corrida terminou!\n\nRanking:\n");
+    
+    /* ordenar o ranking de ciclistas */
+    qsort(c, 2*n, sizeof(*c), comparator);
+    winners[0] = winners[1] = thirdTick[0] = thirdTick[1] = 0;
+    
+    for(i = 0; i < cycsize; i++) {
+        
+        /* vamos contabilizar qual equipe venceu a corrida */
+        winners[c[i].team]++;
+        
+        /* pra isso, temos que ver qual terceiro ciclista acabou antes */
+        if(winners[c[i].team] == 3)
+            thirdTick[c[i].team] = c[i].finalTick;
+        
+        /* exibindo ranking */
+        if(c[i].broken)
+            printf("%do: Ciclista %d (Equipe %d) - ACIDENTE (Volta %d)\n", 
+                i+1, c[i].id, c[i].team+1, c[i].lap+1);
+        else
+            printf("%do: Ciclista %d (Equipe %d) - %.3fs\n", 
+                i+1, c[i].id, c[i].team+1, (float) (c[i].finalTick*60)/1000);
+    }
+    
+    /* exibimos o print da vitória, pra terminar o EP */
+    if(thirdTick[0] < thirdTick[1])
+        printf("\nVitória da equipe 1!\n\n");    
+    else if(thirdTick[0] > thirdTick[1])
+        printf("\nVitória da equipe 2!\n\n");
+    else
+        printf("\nEmpate!\n\n");
+    
     return 0;
 }
 
@@ -181,7 +185,7 @@ void *ciclista (void *a) {
 
         
         /* calcular a próxima posição do ciclista */
-        if (60 == 60) {
+        if (c[i].vel == 60) {
             nextPos = (c[i].pos + 1) % d;
         }
 
@@ -190,6 +194,7 @@ void *ciclista (void *a) {
         {
             /* se não tiver ninguém nesse slot, vamos ocupar ele e desocupar o anterior */
             if (pista[nextPos].mainpos == 0) {
+                /* O ciclista insere seu id na posição principal */
                 pista[nextPos].mainpos = c[i].id;
                 pista[c[i].pos].mainpos = 0;
                 c[i].pos = nextPos;
@@ -205,7 +210,7 @@ void *ciclista (void *a) {
                             globalLap++;
                             
                             /* a cada quatro voltas, chance de alguem quebrar */
-                            if(globalLap % 4 == 0 && globalLap < 16) {
+                            if(globalLap % 4 == 0 && globalLap < 16 ) {
                                 timeToBreak = 1;
                             }
                         }
@@ -324,7 +329,7 @@ void manageRace () {
     /* aumentar o tempo atual */
     timeTick++; 
     
-    /* verificar se é necessario matar algum ciclista */
+    /* verificar se é necessario quebrar algum ciclista */
     if (timeToBreak) {
         timeToBreak = 0;
         breakCyclist();
@@ -349,12 +354,10 @@ void breakCyclist () {
     int startpoint = 0, endpoint = cycsize, chance, lucky;
     
     /* verificamos se as equipes são grandes o suficiente */
-    if(runners[0] == 3) {
+    if(runners[0] == 3) 
         startpoint = cycsize/2;
-    }
-    if(runners[1] == 3) {
+    if(runners[1] == 3) 
         endpoint = cycsize/2;
-    }
     
     if(startpoint == endpoint) return;
     
