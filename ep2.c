@@ -13,17 +13,19 @@
 #include <time.h>
 #define TRUE  1
 #define FALSE 0
+#define MODE_U -1
+#define MODE_V 1
 
 /****************** Estruturas usadas ******************/
 /* Estrutura do Ciclista */
 typedef struct cyc {
     int id;
     int lap;
-    int pos;
     int vel;
     int team;
     int broken;
     int finalTick;
+    float pos;
     pthread_t thread;
 } CYCLIST;
 
@@ -51,6 +53,7 @@ int comparator (const void *a, const void *b);
 SLOT *pista; /* Vetor de slot pista */
 CYCLIST *c;  /* Vetor de ciclista   */
 int d;       /* Tamanho da pista    */
+int mode;
 int debug;   /* Parametro para debug*/
 int cycsize; 
 int raceEnd;
@@ -87,17 +90,17 @@ int main (int argc, char **argv) {
     cycsize = 2*n;
     globalLap = 0;
     timeToBreak = 0;
-    
+
+    /* Inicializando os 2xN ciclistas */
+    c = malloc (2 * n * sizeof (CYCLIST));
+
     /* Modo básico */
     if (type == 'v') {
-        
-        /* Inicializando os 2xN ciclistas */
-        c = malloc (2 * n * sizeof (CYCLIST));
         for (i = 0; i < n; i++) {
             c[i].vel = 60;
             c[i].team = 0;
             c[i].lap = 0;
-            c[i].pos = 0;
+            c[i].pos = 0.0;
             c[i].id = i + 1;
             c[i].finalTick = 0;
             c[i].broken = 0;
@@ -111,15 +114,42 @@ int main (int argc, char **argv) {
             c[i].finalTick = 0;
             c[i].broken = 0;
         }
-
-        /* Inicializando o vetor pista */
-        pista = malloc (d * sizeof (SLOT));
-        for (i = 0; i < d; i++) {
-            pista[i].mainpos = 0;
-            pista[i].ultrapos = 0;
-            pthread_mutex_init ( &pista[i].mut, NULL);
-        }
+        mode = MODE_V;
     }
+    /* Modo de velocidades variadas */
+    else if (type == 'u') {
+        for (i = 0; i < n; i++) {
+            c[i].vel = 30;
+            c[i].team = 0;
+            c[i].lap = 0;
+            c[i].pos = 0.0;
+            c[i].id = i + 1;
+            c[i].finalTick = 0;
+            c[i].broken = 0;
+        }
+        for (i = n; i < 2 * n; i++) {
+            c[i].vel = 30;
+            c[i].team = 1;
+            c[i].lap = 0;
+            c[i].pos = d/2;
+            c[i].id = i + 1;
+            c[i].finalTick = 0;
+            c[i].broken = 0;
+        }
+        mode = MODE_U;
+    }
+    /* ERRO */
+    else
+        return EXIT_FAILURE;
+        
+    /* Inicializando o vetor pista */
+    pista = malloc (d * sizeof (SLOT));
+    for (i = 0; i < d; i++) {
+        pista[i].mainpos = 0;
+        pista[i].ultrapos = 0;
+        pthread_mutex_init ( &pista[i].mut, NULL);
+    }
+
     /* Inicializando a barreira para 2n threads e o mutex do random*/
     pthread_barrier_init (&barrera, NULL, 2*n);
     pthread_mutex_init (&randmutex, NULL);
@@ -174,7 +204,8 @@ int main (int argc, char **argv) {
 
 void *ciclista (void *a) {
     int i, j, passedLap, nextPos;
-    int clock1, clock2, index1, index2, first, second;
+    int index1, index2, first, second;
+    float clock1, clock2, next;
     pthread_t dummyid;
     ARGS* p = (ARGS *) a;
     i = p->i;
@@ -184,23 +215,37 @@ void *ciclista (void *a) {
         if (raceEnd) break;
 
         
-        /* calcular a próxima posição do ciclista */
+        /* Calcular a próxima posição do ciclista e quantos */
+        /*passos ele vai dar no vetor                       */
         if (c[i].vel == 60) {
-            nextPos = (c[i].pos + 1) % d;
+            nextPos = (int) (c[i].pos + 1) % d;
+            next = 1.0; 
+        }
+        else {
+            nextPos = (int) (c[i].pos + 0.5) % d;
+            next = 0.5;
         }
 
-        /* solicitar acesso ao próximo slot */
+        /* Solicitar acesso ao próximo slot */
         pthread_mutex_lock (&pista[nextPos].mut);
         {
-            /* se não tiver ninguém nesse slot, vamos ocupar ele e desocupar o anterior */
+            /* Se não tiver ninguém nesse slot, vamos ocupar ele e desocupar o anterior */
             if (pista[nextPos].mainpos == 0) {
+
                 /* O ciclista insere seu id na posição principal */
                 pista[nextPos].mainpos = c[i].id;
-                pista[c[i].pos].mainpos = 0;
-                c[i].pos = nextPos;
+                
+                /* Verifica se ele estava na posição anterior para poder zera-la*/
+                if (pista[(int) c[i].pos].mainpos == c[i].id)
+                    pista[(int) c[i].pos].mainpos = 0;
+                /* Calculo da proxima posição*/
+                c[i].pos += next;
+                if (c[i].pos >= d)
+                    c[i].pos = c[i].pos - d;
 
                 /* verificar se houve um incremento de volta */
-                if ((c[i].team == 0 && nextPos == 0) || (c[i].team == 1 && nextPos == d/2)) {
+                if ((c[i].team == 0 && nextPos == 0 && c[i].pos == 0.0) || 
+                    (c[i].team == 1 && nextPos == d/2 && c[i].pos == d/2)) {
                     c[i].lap++;
                     
                     /* verificamos se ele é o primeiro a mudar de volta */
@@ -222,14 +267,15 @@ void *ciclista (void *a) {
                         c[i].finalTick = timeTick;
 
                     /* verificamos se ele é o terceiro a passar */
-                    passedLap = clock1 = clock2 = index1 = index2 = 0;
+                    passedLap = index1 = index2 = 0;
+                    clock1 = clock2 = 0.0;
                     for (j = 0; j < cycsize; j++) {
                         
                         if(c[j].broken) continue;
                         
                         /* guardamos tambem o primeiro e segundo colocados */
                         if (c[j].team == c[i].team && c[j].lap >= c[i].lap && i != j) {
-                            if (clock1 == 0) {
+                            if (clock1 == 0.0) {
                                 
                                 /* O ultimo fator da soma corrige a diferença do ponto de largada
                                    das duas equipes */
@@ -261,6 +307,11 @@ void *ciclista (void *a) {
                     }
                     
                 }
+            }
+            else if (pista[nextPos].mainpos == c[i].id) {
+                c[i].pos += next;
+                if (c[i].pos >= d)
+                    c[i].pos = c[i].pos - d;
             }
         }
         pthread_mutex_unlock (&pista[nextPos].mut);
@@ -325,7 +376,6 @@ void manageRace () {
         printf("\n\n");
     }
 
-
     /* aumentar o tempo atual */
     timeTick++; 
     
@@ -361,25 +411,18 @@ void breakCyclist () {
     
     if(startpoint == endpoint) return;
     
-    /* solicitamos acesso ao mutex do random */
-    pthread_mutex_lock(&randmutex);
-    {
-        chance = rand() % 10;
-    }
-    pthread_mutex_unlock(&randmutex);
+    chance = rand() % 10;  
+
     /* chance é de 10% */
     if(chance < 1) {
-        pthread_mutex_lock(&randmutex);
-        {
-            do {
-                
-                /* normalizamos o random pra escolher um dos ciclistas */
-                lucky = (rand() % (endpoint - startpoint)) + startpoint;
-            } while(c[lucky].broken);
-        }
-        pthread_mutex_unlock(&randmutex);
+        do {
+            
+            /* normalizamos o random pra escolher um dos ciclistas */
+            lucky = (rand() % (endpoint - startpoint)) + startpoint;
+        } while(c[lucky].broken);
+
         c[lucky].broken = 1;
-        pista[c[lucky].pos].mainpos = 0;
+        pista[(int) c[lucky].pos].mainpos = 0;
         printf("Ciclista %d (Equipe %d) sofreu um acidente!\n\n", 
             c[lucky].id, c[lucky].team + 1);
         runners[c[lucky].team]--;
