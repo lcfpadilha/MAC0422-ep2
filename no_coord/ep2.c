@@ -27,9 +27,12 @@ typedef struct cyc {
     int team;           /* equipe que ele está.                     */
     int broken;         /* valor que diz se está quebrado ou não.   */
     int deaccel;        /* flag que diz se ele desaacelerou.        */
+    int nextVel;        /* velocidade para a proxima volta.         */
+    int nextVelM;       /* velocidade maxima para a próxima volta.  */
     int finalTick;      /* tempo que ele demorou para chegar.       */
     float pos;          /* posição da pista que ele está.           */
     pthread_t thread;   /* identificador da thread.                 */
+    pthread_mutex_t velmutex; /* mutex para alteração da velocidade */
 } CYCLIST;
 
 /* Estrutura de um slot da pista */
@@ -47,22 +50,20 @@ typedef struct arguments {
 /********************************************************************/
 /************************ Variaveis Globais *************************/
 /********************************************************************/
-SLOT *pista;            /* Vetor de slot pista                       */
-CYCLIST *c;             /* Vetor de ciclista                         */
-CYCLIST t1[4], t2[4];   /* Os 3 bem colocados de cada equipes        */ 
-int d;                  /* Tamanho da pista                          */
-int mode;               /* Modo da corrida                           */
-int debug;              /* Parametro para debug                      */
-int cycsize;            /* Quantidade de ciclistas na corrida.       */
-int raceEnd;            /* Boolean que diz se a corrida terminou     */
-int thirdEnd;           /* Indica que o terceiro ciclista ultrapassou*/
-int timeTick;           /* Quantidade de 60ms decorridos.            */
-int globalLap;          /* Volta no qual o primeiro da equipe está   */
-int runners[2];         /* Quantidade de ciclistas em cada equipe.   */
-int timeToBreak;        /* Boolean que diz se é hora de quebrar.     */
-int timeToChange;       /* Boolean que diz se é hora de trocar as vel*/
-pthread_barrier_t barrera;  /* Barreira de sincronização             */
-pthread_mutex_t lapmutex;   /* Mutex para a volta.                   */
+SLOT *pista; /* Vetor de slot pista */
+CYCLIST *c;  /* Vetor de ciclista   */
+int d;       /* Tamanho da pista    */
+int mode;
+int debug;   /* Parametro para debug*/
+int cycsize; 
+int raceEnd;
+int timeTick;
+int globalLap;
+int runners[2];
+int timeToBreak;
+pthread_barrier_t barrera;
+pthread_mutex_t randmutex;
+pthread_mutex_t lapmutex;
 
 /********************************************************************/
 /*********************** Declaração de funções **********************/
@@ -72,9 +73,9 @@ void *dummy ();
 void waitForSync ();
 void manageRace ();
 void breakCyclist ();
-void selectVelMax ();
 void changeVel ();
 float dist (CYCLIST cycl);
+int selectVelMax ();
 int comparator (const void *a, const void *b);
 
 /********************************************************************/
@@ -99,20 +100,23 @@ int main (int argc, char **argv) {
     srand(time(NULL));
     
     /* inicializando variaveis globais */
+    raceEnd = 0;
     runners[0] = n;
     runners[1] = n;
     cycsize = 2*n;
     globalLap = 0;
-    raceEnd = thirdEnd = timeToChange = timeToBreak = FALSE;
+    timeToBreak = FALSE;
 
     /* Inicializando os 2xN ciclistas */
     c = malloc (2 * n * sizeof (CYCLIST));
 
-    /* Modo de velocidades uniformes */
+    /* Modo para velocidades uniformes */
     if (type == 'u') {
         for (i = 0; i < n; i++) {
             c[i].vel = 60;
             c[i].velM = 60;
+            c[i].nextVelM = selectVelMax ();
+            c[i].nextVel = c[i].nextVelM;
             c[i].deaccel = FALSE;
             c[i].team = 0;
             c[i].lap = 0;
@@ -120,10 +124,13 @@ int main (int argc, char **argv) {
             c[i].id = i + 1;
             c[i].finalTick = 0;
             c[i].broken = 0;
+            pthread_mutex_init (&c[i].velmutex, NULL);
         }
         for (i = n; i < 2 * n; i++) {
             c[i].vel = 60;
             c[i].velM = 60;
+            c[i].nextVelM = selectVelMax ();
+            c[i].nextVel = c[i].nextVelM;
             c[i].deaccel = FALSE;
             c[i].team = 1;
             c[i].lap = 0;
@@ -131,6 +138,7 @@ int main (int argc, char **argv) {
             c[i].id = i + 1;
             c[i].finalTick = 0;
             c[i].broken = 0;
+            pthread_mutex_init (&c[i].velmutex, NULL);
         }
         mode = MODE_U;
     }
@@ -139,6 +147,8 @@ int main (int argc, char **argv) {
         for (i = 0; i < n; i++) {
             c[i].vel = 30;
             c[i].velM = 30;
+            c[i].nextVel = selectVelMax ();
+            c[i].nextVel = c[i].nextVelM;
             c[i].deaccel = FALSE;
             c[i].team = 0;
             c[i].lap = 0;
@@ -146,10 +156,13 @@ int main (int argc, char **argv) {
             c[i].id = i + 1;
             c[i].finalTick = 0;
             c[i].broken = 0;
+            pthread_mutex_init (&c[i].velmutex, NULL);
         }
         for (i = n; i < 2 * n; i++) {
             c[i].vel = 30;
             c[i].velM = 30;
+            c[i].nextVel = selectVelMax ();
+            c[i].nextVel = c[i].nextVelM;
             c[i].deaccel = FALSE;
             c[i].team = 1;
             c[i].lap = 0;
@@ -157,6 +170,7 @@ int main (int argc, char **argv) {
             c[i].id = i + 1;
             c[i].finalTick = 0;
             c[i].broken = 0;
+            pthread_mutex_init (&c[i].velmutex, NULL);
         }
         mode = MODE_V;
     }
@@ -174,6 +188,7 @@ int main (int argc, char **argv) {
 
     /* Inicializando a barreira para 2n threads e o mutex do random*/
     pthread_barrier_init (&barrera, NULL, 2*n);
+    pthread_mutex_init (&randmutex, NULL);
     pthread_mutex_init (&lapmutex, NULL);
     
     /* Disparando as threads  */
@@ -195,10 +210,11 @@ int main (int argc, char **argv) {
     winners[0] = winners[1] = thirdTick[0] = thirdTick[1] = 0;
     
     for (i = 0; i < cycsize; i++) {
+        
         /* vamos contabilizar qual equipe venceu a corrida */
         winners[c[i].team]++;
         
-        /* Para isso, temos que ver qual terceiro ciclista acabou antes */
+        /* pra isso, temos que ver qual terceiro ciclista acabou antes */
         if (winners[c[i].team] == 3)
             thirdTick[c[i].team] = c[i].finalTick;
         
@@ -206,24 +222,13 @@ int main (int argc, char **argv) {
         if (c[i].broken)
             printf("%do: Ciclista %d (Equipe %d) - ACIDENTE (Volta %d)\n", 
                 i+1, c[i].id, c[i].team+1, c[i].lap+1);
-        else if (thirdEnd == 0)
+        else
             printf("%do: Ciclista %d (Equipe %d) - %.3fs\n", 
                 i+1, c[i].id, c[i].team+1, (float) (c[i].finalTick*60)/1000);
-        else
-            printf("%do: Ciclista %d (Equipe %d) - distancia percorrida: %.3fm\n", 
-                i+1, c[i].id, c[i].team+1, dist(c[i]));
     }
     
-    /* Exibimos o print da vitória, pra terminar o EP */
-    if (thirdEnd == 1) {
-        printf("\nO terceiro da equipe 1 ultrapassou o terceiro da equipe 2!\n");
-        printf("Vitória da equipe 1!\n\n"); 
-    }
-    else if (thirdEnd == 2) {
-        printf("\nO terceiro da equipe 2 ultrapassou o terceiro da equipe 1!\n");
-        printf("Vitória da equipe 1!\n\n"); 
-    }
-    else if (thirdTick[0] < thirdTick[1])
+    /* exibimos o print da vitória, pra terminar o EP */
+    if(thirdTick[0] < thirdTick[1])
         printf("\nVitória da equipe 1!\n\n");    
     else if(thirdTick[0] > thirdTick[1])
         printf("\nVitória da equipe 2!\n\n");
@@ -323,13 +328,30 @@ void *ciclista (void *a) {
                 if ((c[i].team == 0 && nextPos == 0 && c[i].pos == 0.0) || 
                     (c[i].team == 1 && nextPos == d/2 && c[i].pos == d/2)) {
                     c[i].lap++;
-                    
-                    /* verificamos se ele é o primeiro a mudar de volta */
+                    /* Alteramos a velocidade do ciclista.                         */
+                    if (mode == MODE_V) {
+                        pthread_mutex_lock (&c[i].velmutex);
+                        c[i].velM = c[i].nextVel;
+                        c[i].vel = c[i].velM;
+                        pthread_mutex_unlock (&c[i].velmutex);
+
+                        /* Selecionamos as próximas velocidades máximas.          */
+                        c[i].nextVelM = selectVelMax ();
+                        c[i].nextVel = c[i].nextVelM;
+
+                        /* Resetamos a flag de desaceleração.                      */
+                        if (c[i].velM == 30 || c[i].deaccel) 
+                            c[i].deaccel = FALSE;
+
+                        /* Todos que estiverem atrás dele ficarão a 30km/h         */
+                        if (c[i].velM == 30)
+                            changeVel (i);
+                    }
+                    /* Verificamos se ele é o primeiro a mudar de volta            */
                     pthread_mutex_lock(&lapmutex);
                     {
                         if(c[i].lap > globalLap) {
                             globalLap++;
-                            timeToChange = TRUE;
 
                             /* a cada quatro voltas, chance de alguem quebrar */
                             if(globalLap % 4 == 0 && globalLap < 16) {
@@ -446,6 +468,13 @@ void manageRace () {
         for (j = 0; j < d; j++) {
             printf("[%3.d][%3.d] %d\n", (int) pista[j].mainpos, (int) pista[j].ultrapos, j);
         }
+        printf("\n");
+        printf("EQUIPE 1\n");
+        for (j = 0; j < cycsize / 2; j++)
+            printf("Ciclista %d, velocidade %d (%d), posição %f\n", j+1, c[j].vel, c[j].velM, dist(c[j]));
+        printf ("EQUIPE 2\n");
+        for (j = cycsize / 2; j < cycsize; j++)
+            printf("Ciclista %d, velocidade %d (%d), posição %f\n", j+1, c[j].vel, c[j].velM, dist(c[j]));
         printf("\n\n");
     }
     
@@ -455,42 +484,6 @@ void manageRace () {
         breakCyclist();
     }
 
-    /* Verifica se é necessário alterar as velocidades */
-    if (mode == MODE_V && timeToChange) {
-        timeToChange = FALSE;
-        selectVelMax ();
-    }
-    /* Determina os 3 primeiros corredores de cada equipe   */
-    t1[0] = c[0];
-    t1[1] = c[1];
-    t1[2] = c[2];
-    qsort ((void *) t1, 3, sizeof (CYCLIST), comparator);
-    for (j = 3; j < cycsize / 2; j++) {
-        t1[3] = c[j];
-        qsort ((void *) t1, 4, sizeof (CYCLIST), comparator);
-    }
-
-    t2[0] = c[j];
-    t2[1] = c[j + 1];
-    t2[2] = c[j + 2];
-    qsort ((void *) t1, 3, sizeof (CYCLIST), comparator);
-    for (j = j + 2; j < cycsize; j++) {
-        t2[3] = c[j];
-        qsort ((void *) t2, 4, sizeof (CYCLIST), comparator);
-    }
-
-    /* Se o terceiro ciclista de uma equipe tiver ultrapassado o terceiro*/
-    /*ciclista de outra, a corrida acaba.                                */
-    if (dist(t1[2]) >= d + dist(t2[2])) {
-        raceEnd = 1;
-        thirdEnd = 1;
-        return;
-    }
-    else if (dist(t2[2]) >= d + dist(t1[2])) {
-        raceEnd = 1;
-        thirdEnd = 2;
-        return;
-    }
     /* Verificar se a corrida acabou */
     raceEnd = 1;
     for (j = 0; j < cycsize; j++) {
@@ -534,37 +527,16 @@ void breakCyclist () {
     }
 }
 
-/* selectVelMax: função que altera todas as velocidades máximas*/
-/*dos 2*n ciclistas. As velocidades podem ser 30 ou 60 (com 50%*/
-/*de chance de ser cada uma.                                   */
-void selectVelMax () {
-    int j, prob;
-    for (j = 0; j < cycsize; j++) {
-        /* Se o ciclista etiver quebrado, pulamos para o próximo */
-        if (c[j].broken) continue;
-
-        /* Alteramos a velocidade com base na probabilidade prob.*/
-        prob = rand() % 10;
-        if (prob >= 5) {
-            c[j].vel = 60;
-            c[j].velM = 60;
-        }
-        else {
-            c[j].vel  = 30;
-            c[j].velM = 30;
-        }
-    }
-
-    /* Fazemos todos os ciclistas que estão atrás daqueles com */
-    /*30km/h diminuirem para 30km.                             */
-    for (j = 0; j < cycsize; j++)
-        if (c[j].velM == 30)
-            changeVel (j);
-
-    /* Todos os ciclistas que não desaceleraram setam sua flag */
-    /*de desaceleração.                                        */
-    for (j = 0; j < cycsize; j++)
-        if (c[j].velM == c[j].vel) c[j].deaccel = FALSE;
+/* selectVelMax: retorna uma velocidade máxima (50% de ser 30km/h*/
+/*e 50% de ser 60km/h).                                          */
+int selectVelMax () {
+    int prob;
+    /* Retornnamos a velocidade com base na probabilidade prob.*/
+    prob = rand() % 10;
+    if (prob >= 5) 
+        return 30;
+    else 
+        return 60;
 }
 
 /* changeVel: recebe um inteiro i e altera todas as velocidades  */
@@ -573,11 +545,15 @@ void selectVelMax () {
 void changeVel (int i) {
     int j;
     for (j = 0; j < cycsize; j++) {
-        if (c[j].team == c[i].team && dist (c[j]) < dist (c[i]))
-            if (c[j].velM > 30 && !c[j].deaccel) {
+        if (c[j].team == c[i].team && dist (c[j]) < dist (c[i])) {
+            pthread_mutex_lock (&c[j].velmutex);
+            if (c[j].nextVelM > 30 && !c[j].deaccel) {
+                c[j].nextVel = 30;
                 c[j].vel = 30;
                 c[j].deaccel = TRUE;
             }
+            pthread_mutex_lock (&c[j].velmutex);
+        }
     }
 }
 
@@ -616,9 +592,7 @@ int comparator (const void *a, const void *b) {
     if(c2->broken)
         return -1;
     
-    /* Caso os ciclistas tenham passado pela linha de chegada, ordenamos*/
-    /*pelo finalTick.                                                   */
-    if (c1->finalTick != 0 && c2->finalTick != 0)
-        return c1->finalTick - c2->finalTick;
-    else return dist(*c2) - dist (*c1);
+    /* A comparação tradicional é por distancia percorrida, ja que mesmo */
+    /*apos passar a linha de chegada eles continuam andando              */
+    return c1->finalTick - c2->finalTick;
 }
