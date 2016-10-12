@@ -3,7 +3,8 @@
 /*                                                                 */
 /*  Simulador de uma corrida - ep2.c                               */
 /*                                                                 */         
-/*  Autores: Gustavo Silva e Leonardo Padilha                      */
+/*  Autores: Gustavo Silva          (No USP 9298260)               */
+/*           Leonardo Padilha       (No USP 9298295)               */
 /*                                                                 */             
 /*******************************************************************/
 #include <stdio.h>
@@ -49,7 +50,7 @@ typedef struct arguments {
 /********************************************************************/
 SLOT *pista;            /* Vetor de slot pista                       */
 CYCLIST *c;             /* Vetor de ciclista                         */
-CYCLIST t1[4], t2[4];   /* Os 3 bem colocados de cada equipes        */ 
+CYCLIST t1[4], t2[4];   /* Os 3 melhores colocados de cada equipes   */ 
 int d;                  /* Tamanho da pista                          */
 int mode;               /* Modo da corrida                           */
 int debug;              /* Parametro para debug                      */
@@ -69,11 +70,14 @@ pthread_mutex_t lapmutex;   /* Mutex para a volta.                   */
 /********************************************************************/
 void *ciclista (void *a);
 void *dummy ();
+void initializeCycs (int v);
 void waitForSync ();
 void manageRace ();
+void printRanking ();
 void breakCyclist ();
 void selectVelMax ();
 void changeVel ();
+void posChange (int i, int nextPos);
 float dist (CYCLIST cycl);
 int comparator (const void *a, const void *b);
 
@@ -81,9 +85,10 @@ int comparator (const void *a, const void *b);
 /************************ Código das funções ************************/
 /********************************************************************/
 int main (int argc, char **argv) {
-    int n, i, winners[2], thirdTick[2];
+    int n, i;
     char type;
-    ARGS* thread_arg;
+    ARGS** thread_arg;
+
     if (argc < 4) exit (EXIT_FAILURE);
     
     /* Inicialização das variáveis dadas na linha de comando*/
@@ -110,54 +115,12 @@ int main (int argc, char **argv) {
 
     /* Modo de velocidades uniformes */
     if (type == 'u') {
-        for (i = 0; i < n; i++) {
-            c[i].vel = 60;
-            c[i].velM = 60;
-            c[i].deaccel = FALSE;
-            c[i].team = 0;
-            c[i].lap = 0;
-            c[i].pos = 0.0;
-            c[i].id = i + 1;
-            c[i].finalTick = 0;
-            c[i].broken = 0;
-        }
-        for (i = n; i < 2 * n; i++) {
-            c[i].vel = 60;
-            c[i].velM = 60;
-            c[i].deaccel = FALSE;
-            c[i].team = 1;
-            c[i].lap = 0;
-            c[i].pos = d/2;
-            c[i].id = i + 1;
-            c[i].finalTick = 0;
-            c[i].broken = 0;
-        }
+        initializeCycs (60);
         mode = MODE_U;
     }
     /* Modo de velocidades variadas */
     else if (type == 'v') {
-        for (i = 0; i < n; i++) {
-            c[i].vel = 30;
-            c[i].velM = 30;
-            c[i].deaccel = FALSE;
-            c[i].team = 0;
-            c[i].lap = 0;
-            c[i].pos = 0.0;
-            c[i].id = i + 1;
-            c[i].finalTick = 0;
-            c[i].broken = 0;
-        }
-        for (i = n; i < 2 * n; i++) {
-            c[i].vel = 30;
-            c[i].velM = 30;
-            c[i].deaccel = FALSE;
-            c[i].team = 1;
-            c[i].lap = 0;
-            c[i].pos = d/2;
-            c[i].id = i + 1;
-            c[i].finalTick = 0;
-            c[i].broken = 0;
-        }
+        initializeCycs (30);
         mode = MODE_V;
     }
     /* ERRO */
@@ -177,66 +140,34 @@ int main (int argc, char **argv) {
     pthread_mutex_init (&lapmutex, NULL);
     
     /* Disparando as threads  */
+    thread_arg = malloc (2 * n * sizeof (ARGS *));
     for (i = 0; i < 2 * n; i++) {
-        thread_arg = malloc (sizeof (ARGS));
-        thread_arg->i = i;
-        pthread_create (&c[i].thread, NULL, &ciclista, thread_arg);
+        thread_arg[i] = malloc (sizeof (ARGS));
+        thread_arg[i]->i = i;
+        pthread_create (&c[i].thread, NULL, &ciclista, thread_arg[i]);
     }
 
-    /* Esperando retornar*/
+    /* Esperando a corrida terminar.    */
     for (i = 0; i < 2 * n; i++)
         pthread_join (c[i].thread, NULL);
-    
-    /* após o fim da corrida */
-    printf("A corrida terminou!\n\nRanking:\n");
-    
-    /* ordenar o ranking de ciclistas */
-    qsort ((void *) c, 2*n, sizeof (CYCLIST), comparator);
-    winners[0] = winners[1] = thirdTick[0] = thirdTick[1] = 0;
-    
-    for (i = 0; i < cycsize; i++) {
-        /* vamos contabilizar qual equipe venceu a corrida */
-        winners[c[i].team]++;
-        
-        /* Para isso, temos que ver qual terceiro ciclista acabou antes */
-        if (winners[c[i].team] == 3)
-            thirdTick[c[i].team] = c[i].finalTick;
-        
-        /* exibindo ranking */
-        if (c[i].broken)
-            printf("%do: Ciclista %d (Equipe %d) - ACIDENTE (Volta %d)\n", 
-                i+1, c[i].id, c[i].team+1, c[i].lap+1);
-        else if (thirdEnd == 0)
-            printf("%do: Ciclista %d (Equipe %d) - %.3fs\n", 
-                i+1, c[i].id, c[i].team+1, (float) (c[i].finalTick*60)/1000);
-        else
-            printf("%do: Ciclista %d (Equipe %d) - distancia percorrida: %.3fm\n", 
-                i+1, c[i].id, c[i].team+1, dist(c[i]));
-    }
-    
-    /* Exibimos o print da vitória, pra terminar o EP */
-    if (thirdEnd == 1) {
-        printf("\nO terceiro da equipe 1 ultrapassou o terceiro da equipe 2!\n");
-        printf("Vitória da equipe 1!\n\n"); 
-    }
-    else if (thirdEnd == 2) {
-        printf("\nO terceiro da equipe 2 ultrapassou o terceiro da equipe 1!\n");
-        printf("Vitória da equipe 1!\n\n"); 
-    }
-    else if (thirdTick[0] < thirdTick[1])
-        printf("\nVitória da equipe 1!\n\n");    
-    else if(thirdTick[0] > thirdTick[1])
-        printf("\nVitória da equipe 2!\n\n");
-    else
-        printf("\nEmpate!\n\n");
+
+    /* Imprimimos o ranking após o final da corrida */
+    printRanking ();
+
+    /* Desalocamos toda a memória alocada */
+    for (i = 0; i < cycsize; i++)
+        free (thread_arg[i]);
+    free (thread_arg);
+    free (c);
+    free (pista);
     
     return 0;
 }
 
+/* ciclista: função que contém toda a lógica da thread do ciclista.     */
 void *ciclista (void *a) {
-    int i, j, passedLap, nextPos;
-    int index1, index2, first, second;
-    float dist1, dist2, next, changeIndex;
+    int i, nextPos, changeIndex;
+    float next;
     pthread_t dummyid;
     ARGS* p = (ARGS *) a;
     i = p->i;
@@ -310,79 +241,17 @@ void *ciclista (void *a) {
                 /* Como houve a alteração da posição do ciclista, setamos a flag. */
                 changeIndex = TRUE;
             }
-            /* Verifica se a próxima posição do ciclista é a que ele está (de ul-*/
-            /*trapassagem).                                                      */
+            /* Verifica se a próxima posição do ciclista é a que ele está (de ul- */
+            /*trapassagem).                                                       */
             else if (pista[nextPos].ultrapos == c[i].id) {
                 c[i].pos += next;
                 if (c[i].pos >= d)
                     c[i].pos = c[i].pos - d;
             }
-            /* Se o indice, */
-            if (changeIndex) {
-                /* verificar se houve um incremento de volta.                     */
-                if ((c[i].team == 0 && nextPos == 0 && c[i].pos == 0.0) || 
-                    (c[i].team == 1 && nextPos == d/2 && c[i].pos == d/2)) {
-                    c[i].lap++;
-                    
-                    /* verificamos se ele é o primeiro a mudar de volta */
-                    pthread_mutex_lock(&lapmutex);
-                    {
-                        if(c[i].lap > globalLap) {
-                            globalLap++;
-                            timeToChange = TRUE;
-
-                            /* a cada quatro voltas, chance de alguem quebrar */
-                            if(globalLap % 4 == 0 && globalLap < 16) {
-                                timeToBreak = TRUE;
-                            }
-                        }
-                    }
-                    pthread_mutex_unlock(&lapmutex);
-
-                    /* caso ele terminou a corrida, marcamos isso */
-                    if(c[i].lap == 16)
-                        c[i].finalTick = timeTick + 1;
-
-                    /* verificamos se ele é o terceiro a passar */
-                    passedLap = index1 = index2 = 0;
-                    dist1 = dist2 = 0.0;
-                    for (j = 0; j < cycsize; j++) {
-                        
-                        if(c[j].broken) continue;
-                        
-                        /* Guardamos tambem o primeiro e segundo colocados */
-                        if (c[j].team == c[i].team && c[j].lap >= c[i].lap && i != j) {
-                            if (dist1 == 0.0) {
-                                /* O ultimo fator da soma corrige a diferença do ponto */
-                                /*de largada das duas equipes.                         */
-                                dist1 = (c[j].lap * d) + c[j].pos - c[j].team*(d/2);
-                                index1 = c[j].id;
-                            } 
-                            else {
-                                dist2 = (c[j].lap * d) + c[j].pos - c[j].team*(d/2);
-                                index2 = c[j].id;
-                            }
-                            passedLap++;
-                        }
-                    }
-
-                    /* Exibimos o print de nova volta */
-                    if (passedLap == 2) {
-                        if (dist1 > dist2) {
-                            first = index1;
-                            second = index2;
-                        } 
-                        else {
-                            first = index2;
-                            second = index1;
-                        }
-
-                        printf("Ciclista %d (Equipe %d) finalizou a volta %d no instante %.3fs.\n", 
-                               c[i].id, c[i].team+1, c[i].lap, (float) (timeTick*60)/1000);
-                        printf("Primeiro da equipe: %d\nSegundo  da equipe: %d\n\n", first, second);
-                    }
-                }
-            }
+            /* Se o indice da posição do vetor for alterado, chamamos a função    */
+            /*responsável por fazer as verificações de mudança de posição.        */
+            if (changeIndex) 
+                posChange (i, nextPos);
         }
         pthread_mutex_unlock (&pista[nextPos].mut);
 
@@ -400,9 +269,10 @@ void *ciclista (void *a) {
     return NULL;
 }
 
-/* thread vazia, apenas para substituir os ciclistas quebrados */
+/* dummy: função para uma thread vazia, que servirá apenas para a barreira*/
+/*de sincronização, substituindo os ciclistas quebrados.                  */
 void *dummy () {
-    while(TRUE) {
+    while (TRUE) {
         
         /* verificar se a corrida acabou */
         if (raceEnd) break; 
@@ -414,9 +284,87 @@ void *dummy () {
     return NULL;
 }
 
-/* função que sincroniza todas as thread após uma iteração.
-   utiliza duas barreiras pra isso, recheadas por código de controle
-   do funcionamento da corrida.                                      */
+/* initializeCycs: recebe um inteiro v e inicializa o vetor de ciclistas*/
+/*com velocidade v.                                                     */
+void initializeCycs (int v) {
+    int i;
+
+    for (i = 0; i < cycsize / 2; i++) {
+        c[i].vel = v;
+        c[i].velM = v;
+        c[i].deaccel = FALSE;
+        c[i].team = 0;
+        c[i].lap = 0;
+        c[i].pos = 0.0;
+        c[i].id = i + 1;
+        c[i].finalTick = 0;
+        c[i].broken = 0;
+    }
+    for (i = cycsize / 2; i < cycsize; i++) {
+        c[i].vel = v;
+        c[i].velM = v;
+        c[i].deaccel = FALSE;
+        c[i].team = 1;
+        c[i].lap = 0;
+        c[i].pos = d/2;
+        c[i].id = i + 1;
+        c[i].finalTick = 0;
+        c[i].broken = 0;
+    }
+}
+
+void printRanking () {
+    int i, winners[2], thirdTick[2];
+
+    printf("A corrida terminou!\n\nRanking:\n");
+
+    /* Ordenamos os ciclistas com base na função comparadora */
+    qsort ((void *) c, cycsize, sizeof (CYCLIST), comparator);
+    winners[0] = winners[1] = thirdTick[0] = thirdTick[1] = 0;
+    
+    for (i = 0; i < cycsize; i++) {
+        /* Vamos contabilizar qual equipe venceu a corrida, caso */
+        /*a corrida tenha acabado após todos passarem na linha de*/
+        /*chegada.                                               */
+        winners[c[i].team]++;
+        
+        /* Para isso, temos que ver qual terceiro ciclista acabou antes */
+        if (winners[c[i].team] == 3)
+            thirdTick[c[i].team] = c[i].finalTick;
+        
+        /* Exibindo ranking */
+        if (c[i].broken)
+            printf("%do: Ciclista %d (Equipe %d) - ACIDENTE (Volta %d)\n", 
+                i+1, c[i].id, c[i].team+1, c[i].lap+1);
+        else if (thirdEnd == 0)
+            printf("%do: Ciclista %d (Equipe %d) - %.3fs\n", 
+                i+1, c[i].id, c[i].team+1, (float) (c[i].finalTick*60)/1000);
+        else
+            printf("%do: Ciclista %d (Equipe %d) - distancia percorrida: %.3fm\n", 
+                i+1, c[i].id, c[i].team+1, dist(c[i]));
+    }
+    
+    /* Se a flag para fim de corrida pela ultrapassagem do terceiro ciclista */
+    /*for diferente de 0, então imprimimos qual equipe foi vitoriosa.        */
+    if (thirdEnd == 1) {
+        printf("\nO terceiro da equipe 1 ultrapassou o terceiro da equipe 2!\n");
+        printf("Vitória da equipe 1!\n\n"); 
+    }
+    else if (thirdEnd == 2) {
+        printf("\nO terceiro da equipe 2 ultrapassou o terceiro da equipe 1!\n");
+        printf("Vitória da equipe 2!\n\n"); 
+    }
+    else if (thirdTick[0] < thirdTick[1])
+        printf("\nVitória da equipe 1!\n\n");    
+    else if(thirdTick[0] > thirdTick[1])
+        printf("\nVitória da equipe 2!\n\n");
+    else
+        printf("\nEmpate!\n\n");
+}
+
+/* waitForSync: função que sincroniza todas as thread após uma iteração.   */
+/*utiliza duas barreiras pra isso, entre essas barreiras temos um código de*/
+/*controle do funcionamento da corrida.                                    */
 void waitForSync() {    
     
     /* sincronizar na barreira para o intervalo seguinte */
@@ -427,13 +375,82 @@ void waitForSync() {
         manageRace();
     }
 
-    /* mais uma barreira, pra garantir que ninguém vai recomeçar 
-       a volta sem saber se a corrida acabou                      */
+    /* mais uma barreira, pra garantir que ninguém vai recomeçar */
+    /*a volta sem saber se a corrida acabou                      */
     pthread_barrier_wait (&barrera);
 }
+/* posChange: recebe um inteiro i e faz as verificações relativas à mu- */
+/*dança de posição do ciclista identificado por i para a posição nextPos*/
+void  posChange (int i, int nextPos) {
+    int j, index1, index2, first, second, passedLap;
+    float dist1, dist2;
 
-/* código que gerencia o funcionamento da corrida ao fim de cada
-   iteração dos ciclistas. Só é executado em uma thread.         */
+    /* Verificar se houve um incremento de volta.                      */
+    if ((c[i].team == 0 && nextPos == 0 && c[i].pos == 0.0) || 
+        (c[i].team == 1 && nextPos == d/2 && c[i].pos == d/2)) {
+        c[i].lap++;
+        
+        /* Vverificamos se ele é o primeiro a mudar de volta */
+        pthread_mutex_lock(&lapmutex);
+        {
+            if(c[i].lap > globalLap) {
+                globalLap++;
+                timeToChange = TRUE;
+
+                /* A cada quatro voltas, chance de alguem quebrar */
+                if(globalLap % 4 == 0 && globalLap < 16) {
+                    timeToBreak = TRUE;
+                }
+            }
+        }
+        pthread_mutex_unlock(&lapmutex);
+
+        /* caso ele terminou a corrida, marcamos isso */
+        if(c[i].lap == 16)
+            c[i].finalTick = timeTick + 1;
+
+        /* verificamos se ele é o terceiro a passar */
+        passedLap = index1 = index2 = 0;
+        dist1 = dist2 = 0.0;
+        for (j = 0; j < cycsize; j++) {
+            
+            if(c[j].broken) continue;
+            
+            /* Guardamos tambem o primeiro e segundo colocados */
+            if (c[j].team == c[i].team && c[j].lap >= c[i].lap && i != j) {
+                if (dist1 == 0.0) {
+                    /* O ultimo fator da soma corrige a diferença do ponto */
+                    /*de largada das duas equipes.                         */
+                    dist1 = (c[j].lap * d) + c[j].pos - c[j].team*(d/2);
+                    index1 = c[j].id;
+                } 
+                else {
+                    dist2 = (c[j].lap * d) + c[j].pos - c[j].team*(d/2);
+                    index2 = c[j].id;
+                }
+                passedLap++;
+            }
+        }
+
+        /* Exibimos o print de nova volta */
+        if (passedLap == 2) {
+            if (dist1 > dist2) {
+                first = index1;
+                second = index2;
+            } 
+            else {
+                first = index2;
+                second = index1;
+            }
+
+            printf("Ciclista %d (Equipe %d) finalizou a volta %d no instante %.3fs.\n", 
+                   c[i].id, c[i].team+1, c[i].lap, (float) (timeTick*60)/1000);
+            printf("Primeiro da equipe: %d\nSegundo  da equipe: %d\n\n", first, second);
+        }
+    }
+}
+/* manageRace: código que gerencia o funcionamento da corrida ao fim */
+/*de cada iteração dos ciclistas. Só é executado em uma thread.      */
 void manageRace () {
     int j;
 
@@ -465,28 +482,33 @@ void manageRace () {
     t1[1] = c[1];
     t1[2] = c[2];
     qsort ((void *) t1, 3, sizeof (CYCLIST), comparator);
+
+    /* Insere cada ciclista no final do vetor t1 e reordena,  */
+    /*assim garantimos que no final da iteração os 3 primeiros*/
+    /*elementos do vetor são os 3 primeiros da equipe         */
     for (j = 3; j < cycsize / 2; j++) {
         t1[3] = c[j];
         qsort ((void *) t1, 4, sizeof (CYCLIST), comparator);
     }
 
+    /* Fazemos de forma semelhante para a equipe 2.           */
     t2[0] = c[j];
     t2[1] = c[j + 1];
     t2[2] = c[j + 2];
-    qsort ((void *) t1, 3, sizeof (CYCLIST), comparator);
-    for (j = j + 2; j < cycsize; j++) {
+    qsort ((void *) t2, 3, sizeof (CYCLIST), comparator);
+    for (j = j + 3; j < cycsize; j++) {
         t2[3] = c[j];
         qsort ((void *) t2, 4, sizeof (CYCLIST), comparator);
     }
 
     /* Se o terceiro ciclista de uma equipe tiver ultrapassado o terceiro*/
     /*ciclista de outra, a corrida acaba.                                */
-    if (dist(t1[2]) >= d + dist(t2[2])) {
+    if (dist(t1[2]) >= d/2 + dist(t2[2])) {
         raceEnd = 1;
         thirdEnd = 1;
         return;
     }
-    else if (dist(t2[2]) >= d + dist(t1[2])) {
+    else if (dist(t2[2]) >= d/2 + dist(t1[2])) {
         raceEnd = 1;
         thirdEnd = 2;
         return;
@@ -594,8 +616,8 @@ float dist (CYCLIST cycl) {
     return dist;
 }
 
-/* função que ordena os ciclistas por ordem de chegada, compa-  */
-/*rando dois a dois:                                            */
+/* comparator: função que ordena os ciclistas por ordem de che- */
+/*gada, comparando dois a dois:                                 */
 /* - retorna um valor < 0 se A deve vir antes de B              */
 /* - retorna um valor > 0 se B deve vir antes de A              */
 /* - retorna 0 se são iguais                                    */
